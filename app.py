@@ -23,17 +23,11 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
-
-# Make sure we can import the signal_tool package
+# Add the current directory to the import path
 HERE = Path(__file__).parent
-sys.path.insert(0, str(HERE.parent))
-from signal_tool import (  # noqa: E402
-    PAIRS,
-    align,
-    compute_derivatives,
-    lag_correlation,
-    peak_correlation,
-)
+sys.path.insert(0, str(HERE))
+from core import align, compute_derivatives, lag_correlation, peak_correlation  # noqa: E402
+from pairs import PAIRS  # noqa: E402
 
 # =================================================================
 # PAGE CONFIG
