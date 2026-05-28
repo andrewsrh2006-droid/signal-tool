@@ -13,8 +13,8 @@ To run one pair:
     python run.py copper_transformer
 """
 
-from .core import Signal, SignalPair
-from .sources import load_fred_monthly, load_annual
+from core import Signal, SignalPair
+from sources import load_fred_monthly, load_annual
 
 
 # =================================================================
