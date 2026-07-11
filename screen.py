@@ -1,5 +1,9 @@
 """
-False-signal screen.
+Correlation-robustness screen (a.k.a. the false-correlation screen).
+
+A strong correlation can still be spurious — a fluke of the data. This screen
+tests whether a correlation is genuine and usable as a leading signal, rather
+than an accident of noise, a single lucky period, or a coincidence.
 
 Before any pair is called CONFIRMED, it must survive four common-sense checks.
 Each check attacks a different way a correlation can be fake luck rather than a
@@ -33,9 +37,14 @@ The four checks (plain-language names in the report):
      to judge whether the reason is actually sensible — the tool can't do that.
 
 Overall verdict:
-  A pair PASSES the screen only if it (a) actually leads (peak lag >= 0), and
-  (b) passes checks 1, 2, 3 and has a mechanism stated (4). Otherwise it is
-  FLAGGED, and the report lists which checks it failed and why.
+  Checks are of two kinds. GATE checks are disqualifying: "Survives smoothing"
+  and "Holds over time". SUPPORT checks add confidence but never flag a signal
+  on their own: "Second opinion" and "Has a reason". A lone signal is marked
+  "not yet corroborated" (not failed), because with a small signal library the
+  absence of a second opinion may just mean we haven't collected the signal that
+  would agree yet.
+  A pair PASSES only if it actually leads (peak lag >= 0), the correlation is at
+  least MIN_R, and no GATE check fails. Otherwise it is FLAGGED.
 """
 
 from dataclasses import dataclass, field
@@ -86,8 +95,9 @@ def _peak(pair: SignalPair, df_yoy: pd.DataFrame) -> tuple:
 @dataclass
 class CheckResult:
     name: str            # plain-language check name
-    passed: Optional[bool]   # True / False / None (= not applicable)
+    passed: Optional[bool]   # True / False / None (= not applicable / not yet testable)
     detail: str          # one-line human explanation
+    kind: str = "gate"   # "gate" = disqualifying · "support" = confirmatory only
 
 
 @dataclass
@@ -139,9 +149,11 @@ def check_second_opinion(target: SignalPair, target_peak: tuple,
             corroborators.append(f"{other.leading.name} (r={o_r:+.2f} @ {o_lag:+d})")
     if corroborators:
         return CheckResult("Second opinion", True,
-                           "backed up by " + "; ".join(corroborators))
-    return CheckResult("Second opinion", False,
-                       "no independent signal agrees at a similar lead time — stands alone")
+                           "backed up by " + "; ".join(corroborators), kind="support")
+    return CheckResult("Second opinion", None,
+                       "not yet corroborated — no other signal in the library agrees at a "
+                       "similar lead (this becomes meaningful as more signals are added)",
+                       kind="support")
 
 
 def check_survives_smoothing(pair: SignalPair, df_yoy: pd.DataFrame,
@@ -199,9 +211,11 @@ def check_has_reason(pair: SignalPair) -> CheckResult:
     text = (pair.hypothesis or "").strip()
     if len(text) >= 20:
         return CheckResult("Has a reason", True,
-                           f'stated: "{text[:90]}..." (human should confirm this is sensible)')
-    return CheckResult("Has a reason", False,
-                       "no written mechanism — why should these two move together?")
+                           f'stated: "{text[:90]}..." (human should confirm this is sensible)',
+                           kind="support")
+    return CheckResult("Has a reason", None,
+                       "no written mechanism yet — why should these two move together?",
+                       kind="support")
 
 
 # =================================================================
@@ -231,10 +245,12 @@ def screen_all(all_pairs: dict) -> dict:
             check_has_reason(pair),
         ]
 
-        # A pair passes only if it actually leads AND every applicable check is not-False,
-        # AND the three evidence checks that matter are True (mechanism must be present too).
-        no_failures = all(c.passed is not False for c in checks)
-        overall = leads and no_failures and abs(r) >= MIN_R
+        # Only GATE checks are disqualifying. SUPPORT checks (second opinion,
+        # has a reason) add confidence but never flag a signal on their own — this
+        # stops a lone-but-real signal from being failed just because the signal
+        # library is still small.
+        gate_ok = all(c.passed is not False for c in checks if c.kind == "gate")
+        overall = leads and gate_ok and abs(r) >= MIN_R
 
         results[name] = ScreenResult(
             pair_name=name, peak_lag=lag, peak_r=r, n=n,

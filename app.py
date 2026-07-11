@@ -116,36 +116,56 @@ st.markdown(f"**Hypothesis:** *{pair.hypothesis}*")
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Peak correlation", f"{peak_r:+.3f}" if not np.isnan(peak_r) else "—")
-col2.metric("Lead time", f"{peak_lag:+d} {pair.lag_unit}")
+col2.metric("Measured lead", f"{peak_lag:+d} {pair.lag_unit}")
 col3.metric("Sample at peak", f"{peak_n}")
 col4.metric("Total observations", f"{len(df)}")
 
-# Verdict banner
-in_range = pair.expected_lead_low <= abs(peak_lag) <= pair.expected_lead_high
-if not np.isnan(peak_r) and abs(peak_r) >= 0.5 and peak_lag > 0 and in_range:
-    st.success("✅ **Hypothesis CONFIRMED** — strong correlation in predicted direction, within expected lead range")
-elif not np.isnan(peak_r) and peak_lag < 0 and abs(peak_r) >= 0.5:
-    st.error("❌ **Hypothesis REJECTED — direction reversed.** Outcome appears to lead the proposed leading signal, not vice versa.")
-elif not np.isnan(peak_r) and abs(peak_r) >= 0.4 and peak_lag > 0:
-    st.warning("⚠️ **Hypothesis PARTIALLY supported** — moderate correlation; lead time may differ from hypothesis")
-elif not np.isnan(peak_r) and abs(peak_r) < 0.3:
-    st.error("❌ **Hypothesis REJECTED** — correlation too weak at any tested lag")
-else:
-    st.info("ℹ️ **Hypothesis INCONCLUSIVE** — mixed or weak signal")
-
-# Screen badge — does this pair survive the false-signal checks?
+# Robustness-screen result for this pair (computed once, reused in the tabs below)
 screen_results = run_screen_cached()
 sr = screen_results[selected]
+
+# --- Hypothesis verdict ---
+# CONFIRMED = strong + correct direction + passes the robustness screen.
+# The lead time is REPORTED as a measured output, not required to match a prior guess.
+prior = f"{pair.expected_lead_low:.0f}–{pair.expected_lead_high:.0f} {pair.lag_unit}"
+if not np.isnan(peak_r) and peak_lag > 0 and abs(peak_r) >= 0.5 and sr.overall_pass:
+    st.success(
+        f"✅ **Hypothesis CONFIRMED** — strong correlation ({peak_r:+.2f}) in the predicted "
+        f"direction, and it passes the robustness screen. Measured lead: **{peak_lag:+d} "
+        f"{pair.lag_unit}** (prior guess was {prior})."
+    )
+elif not np.isnan(peak_r) and peak_lag > 0 and abs(peak_r) >= 0.5 and not sr.overall_pass:
+    st.warning(
+        f"⚠️ **Strong, but NOT robust** — the correlation is strong ({peak_r:+.2f}) and points the "
+        "right way, but it fails the robustness screen, so it may be a false correlation. "
+        "See the **Screen** tab."
+    )
+elif not np.isnan(peak_r) and peak_lag < 0 and abs(peak_r) >= 0.5:
+    st.error(
+        f"❌ **Hypothesis REJECTED — direction reversed.** The outcome leads the proposed signal "
+        f"({peak_r:+.2f} at {peak_lag:+d} {pair.lag_unit}), not the other way around. "
+        "Worth testing the flipped pair."
+    )
+elif not np.isnan(peak_r) and abs(peak_r) >= 0.4 and peak_lag > 0:
+    st.warning(
+        f"⚠️ **Hypothesis PARTIALLY supported** — only a moderate correlation ({peak_r:+.2f}); "
+        "treat with caution."
+    )
+elif not np.isnan(peak_r) and abs(peak_r) < 0.3:
+    st.error("❌ **Hypothesis REJECTED** — correlation too weak at any tested lag.")
+else:
+    st.info("ℹ️ **Hypothesis INCONCLUSIVE** — mixed or weak signal.")
+
+# --- Robustness-screen badge ---
 if sr.overall_pass:
     st.markdown(
-        "🛡️ **False-signal screen: PASSED** — this signal clears all four "
-        "trust checks. See the **Screen** tab for details."
+        "🛡️ **Correlation-robustness screen: PASSED** — clears the trust checks, "
+        "so the correlation is unlikely to be a fluke. See the **Screen** tab."
     )
 else:
     failed = ", ".join(sr.failed_checks) if sr.failed_checks else "it does not actually lead the outcome"
     st.markdown(
-        f"🚩 **False-signal screen: FLAGGED** — failed on: {failed}. "
-        "See the **Screen** tab for details."
+        f"🚩 **Correlation-robustness screen: FLAGGED** — {failed}. See the **Screen** tab."
     )
 
 
@@ -340,25 +360,26 @@ with tab_corr:
 
 # ---- Tab: Screen ----
 with tab_screen:
-    st.header("🛡️ False-signal screen")
+    st.header("🛡️ Correlation-robustness screen")
     st.caption(
-        "If you test many signals, some will look connected purely by luck. "
-        "Every pair must clear four common-sense checks before it can be trusted. "
-        "A pair passes only if it actually leads AND clears all four."
+        "A strong correlation can still be a fluke (a 'spurious' or false correlation). "
+        "This screen tests whether the correlation is genuine and usable, using four checks. "
+        "Two are disqualifying gates; two add confidence but never flag a pair on their own."
     )
 
     with st.expander("What the four checks mean", expanded=False):
         st.markdown(
-            "1. **Second opinion** — Is there another, independent signal pointing "
-            "the same way at a similar lead time? One signal can line up by luck; "
-            "several lining up together is very unlikely to be luck.\n"
-            "2. **Survives smoothing** — If we smooth out the random jitter, is the "
+            "**Disqualifying gates** (a pair fails the screen if either fails):\n\n"
+            "- **Survives smoothing** — If we smooth out the random jitter, is the "
             "pattern still there? Real patterns survive; noise washes out.\n"
-            "3. **Holds over time** — Split the history into an early half and a late "
-            "half. Does the relationship show up in both? A real link keeps recurring.\n"
-            "4. **Has a reason** — Is there a written, common-sense reason the two "
-            "things should be connected? (This only checks a reason exists — a human "
-            "still judges whether it's sensible.)"
+            "- **Holds over time** — Split the history into an early half and a late "
+            "half. Does the relationship show up in both? A real link keeps recurring.\n\n"
+            "**Confirmatory checks** (they build confidence, but a 'no' only means "
+            "'not yet shown', not 'failed'):\n\n"
+            "- **Second opinion** — Is there another, independent signal pointing the "
+            "same way at a similar lead? Becomes meaningful as the signal library grows.\n"
+            "- **Has a reason** — Is there a written, common-sense reason the two things "
+            "should be connected? (A human still judges whether it's sensible.)"
         )
 
     # --- Selected pair, detailed ---
@@ -407,10 +428,12 @@ with tab_compare:
         df_p = load_pair_data(name)
         lags_p = compute_lag(name, p.max_lag)
         lag, r, n = peak_correlation(lags_p)
-        in_range_p = p.expected_lead_low <= abs(lag) <= p.expected_lead_high
+        passed_p = screen_results[name].overall_pass
         verdict = (
             "✅ Confirmed"
-            if (not np.isnan(r) and abs(r) >= 0.5 and lag > 0 and in_range_p)
+            if (not np.isnan(r) and abs(r) >= 0.5 and lag > 0 and passed_p)
+            else "⚠️ Strong / not robust"
+            if (not np.isnan(r) and abs(r) >= 0.5 and lag > 0)
             else "❌ Reversed"
             if (not np.isnan(r) and lag < 0 and abs(r) >= 0.5)
             else "⚠️ Partial"
@@ -425,8 +448,8 @@ with tab_compare:
             "Outcome": p.outcome.name,
             "Frequency": p.frequency,
             "Peak r": f"{r:+.3f}" if not np.isnan(r) else "—",
-            "Lead": f"{lag:+d} {p.lag_unit}",
-            "Expected": f"{p.expected_lead_low:.0f}–{p.expected_lead_high:.0f} {p.lag_unit}",
+            "Measured lead": f"{lag:+d} {p.lag_unit}",
+            "Prior guess": f"{p.expected_lead_low:.0f}–{p.expected_lead_high:.0f} {p.lag_unit}",
             "N (total)": len(df_p),
             "Verdict": verdict,
         })
