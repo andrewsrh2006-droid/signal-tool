@@ -23,11 +23,13 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
-# Add the current directory to the import path
+
+# Make sure we can import the signal_tool package
 HERE = Path(__file__).parent
-sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent))
 from core import align, compute_derivatives, lag_correlation, peak_correlation  # noqa: E402
 from pairs import PAIRS  # noqa: E402
+from screen import screen_all  # noqa: E402
 
 # =================================================================
 # PAGE CONFIG
@@ -62,6 +64,16 @@ def compute_lag(pair_name: str, max_lag: int):
     df = load_pair_data(pair_name)
     df_yoy = df.dropna(subset=["x_d1", "y_d1"])
     return lag_correlation(df_yoy["x_d1"], df_yoy["y_d1"], max_lag)
+
+
+@st.cache_data(show_spinner=False)
+def run_screen_cached():
+    """Run the false-signal screen on every pair (cached)."""
+    return screen_all(PAIRS)
+
+
+# Marks for a check's pass/fail/not-applicable state
+CHECK_MARK = {True: "✅", False: "❌", None: "➖"}
 
 
 # =================================================================
@@ -121,12 +133,27 @@ elif not np.isnan(peak_r) and abs(peak_r) < 0.3:
 else:
     st.info("ℹ️ **Hypothesis INCONCLUSIVE** — mixed or weak signal")
 
+# Screen badge — does this pair survive the false-signal checks?
+screen_results = run_screen_cached()
+sr = screen_results[selected]
+if sr.overall_pass:
+    st.markdown(
+        "🛡️ **False-signal screen: PASSED** — this signal clears all four "
+        "trust checks. See the **Screen** tab for details."
+    )
+else:
+    failed = ", ".join(sr.failed_checks) if sr.failed_checks else "it does not actually lead the outcome"
+    st.markdown(
+        f"🚩 **False-signal screen: FLAGGED** — failed on: {failed}. "
+        "See the **Screen** tab for details."
+    )
+
 
 # =================================================================
 # TABS
 # =================================================================
-tab_data, tab_pre, tab_corr, tab_compare = st.tabs(
-    ["📋 Data", "📈 Pre-Analysis", "🔄 Correlation", "🔀 Compare pairs"]
+tab_data, tab_pre, tab_corr, tab_screen, tab_compare = st.tabs(
+    ["📋 Data", "📈 Pre-Analysis", "🔄 Correlation", "🛡️ Screen", "🔀 Compare pairs"]
 )
 
 
@@ -309,6 +336,65 @@ with tab_corr:
         use_container_width=True,
         height=400,
     )
+
+
+# ---- Tab: Screen ----
+with tab_screen:
+    st.header("🛡️ False-signal screen")
+    st.caption(
+        "If you test many signals, some will look connected purely by luck. "
+        "Every pair must clear four common-sense checks before it can be trusted. "
+        "A pair passes only if it actually leads AND clears all four."
+    )
+
+    with st.expander("What the four checks mean", expanded=False):
+        st.markdown(
+            "1. **Second opinion** — Is there another, independent signal pointing "
+            "the same way at a similar lead time? One signal can line up by luck; "
+            "several lining up together is very unlikely to be luck.\n"
+            "2. **Survives smoothing** — If we smooth out the random jitter, is the "
+            "pattern still there? Real patterns survive; noise washes out.\n"
+            "3. **Holds over time** — Split the history into an early half and a late "
+            "half. Does the relationship show up in both? A real link keeps recurring.\n"
+            "4. **Has a reason** — Is there a written, common-sense reason the two "
+            "things should be connected? (This only checks a reason exists — a human "
+            "still judges whether it's sensible.)"
+        )
+
+    # --- Selected pair, detailed ---
+    st.subheader(f"This pair: `{selected}`")
+    if sr.overall_pass:
+        st.success("✅ **PASSES the screen** — clears all four checks and leads the outcome.")
+    else:
+        st.error(
+            "🚩 **FLAGGED** — "
+            + ("does not actually lead the outcome. " if not sr.leads else "")
+            + ("Failed checks: " + ", ".join(sr.failed_checks) if sr.failed_checks else "")
+        )
+    st.caption(
+        f"Peak correlation r={sr.peak_r:+.3f} at a lead of {sr.peak_lag:+.0f} "
+        f"{pair.lag_unit} · leads the outcome: {'yes' if sr.leads else 'NO'}"
+    )
+    for c in sr.checks:
+        st.markdown(f"{CHECK_MARK[c.passed]} **{c.name}** — {c.detail}")
+
+    st.divider()
+
+    # --- All pairs, at a glance ---
+    st.subheader("All signal pairs at a glance")
+    st.caption("✅ pass · ❌ fail · ➖ not applicable (usually too few data points)")
+    screen_rows = []
+    for name, r in screen_results.items():
+        row = {
+            "Pair": name,
+            "Verdict": "✅ Passes" if r.overall_pass else "🚩 Flagged",
+            "Leads?": "yes" if r.leads else "NO",
+            "Peak r": f"{r.peak_r:+.3f}" if not np.isnan(r.peak_r) else "—",
+        }
+        for c in r.checks:
+            row[c.name] = CHECK_MARK[c.passed]
+        screen_rows.append(row)
+    st.dataframe(pd.DataFrame(screen_rows), use_container_width=True, hide_index=True)
 
 
 # ---- Tab: Compare pairs ----
