@@ -29,7 +29,18 @@ HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE.parent))
 from core import align, compute_derivatives, lag_correlation, peak_correlation  # noqa: E402
 from pairs import PAIRS  # noqa: E402
-from screen import screen_all  # noqa: E402
+
+# The screen module works whether the repo is laid out as a package
+# (local) or flat (Streamlit Cloud deploy).
+try:
+    from signal_tool.screen import screen_all  # noqa: E402
+except ModuleNotFoundError:  # flat deploy layout
+    from screen import screen_all  # noqa: E402
+
+try:
+    from signal_tool.sources import load_fred_monthly  # noqa: E402
+except ModuleNotFoundError:  # flat deploy layout
+    from sources import load_fred_monthly  # noqa: E402
 
 # =================================================================
 # PAGE CONFIG
@@ -70,6 +81,73 @@ def compute_lag(pair_name: str, max_lag: int):
 def run_screen_cached():
     """Run the false-signal screen on every pair (cached)."""
     return screen_all(PAIRS)
+
+
+@st.cache_data(show_spinner=False)
+def market_analysis():
+    """Signal groups + market-control test. Returns (corr matrix, table, clusters)."""
+    def yoy(s):
+        return s.pct_change(12) * 100
+
+    monthly = {n: p for n, p in PAIRS.items() if p.frequency == "monthly"}
+    lead = {p.leading.name: yoy(p.leading.load()) for p in monthly.values()}
+    outcome = yoy(load_fred_monthly("transformer_ppi"))
+    market = yoy(load_fred_monthly("market_all_commodities"))
+    C = pd.concat(lead, axis=1).dropna().corr()
+
+    # cluster leading signals at correlation >= 0.70 (simple union-find, no scipy)
+    names = list(C.columns)
+    parent = {n: n for n in names}
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            if C.loc[a, b] >= 0.70:
+                parent[find(a)] = find(b)
+    groups = {}
+    for n in names:
+        groups.setdefault(find(n), []).append(n)
+    clusters = list(groups.values())
+
+    def _c(a, b):
+        m = np.isfinite(a) & np.isfinite(b)
+        if m.sum() < 4 or np.std(a[m]) == 0 or np.std(b[m]) == 0:
+            return np.nan
+        return np.corrcoef(a[m], b[m])[0, 1]
+
+    def _partial(a, b, z):
+        rab, raz, rbz = _c(a, b), _c(a, z), _c(b, z)
+        d = np.sqrt((1 - raz ** 2) * (1 - rbz ** 2))
+        return (rab - raz * rbz) / d if d else np.nan
+
+    rows = []
+    for p in monthly.values():
+        x = lead[p.leading.name]
+        d = pd.concat([x.rename("x"), outcome.rename("y"), market.rename("z")], axis=1).dropna()
+        if len(d) < 30:
+            continue
+        lag, r, _ = peak_correlation(lag_correlation(d["x"], d["y"], p.max_lag))
+        dd = pd.concat([d["x"].rename("x"), d["y"].shift(-lag).rename("y"), d["z"].rename("z")], axis=1).dropna()
+        raw = _c(dd["x"].values, dd["y"].values)
+        par = _partial(dd["x"].values, dd["y"].values, dd["z"].values)
+        rel = _c((dd["x"] - dd["z"]).values, dd["y"].values)
+        rows.append({
+            "Signal": p.leading.name,
+            "Lead (mo)": int(lag),
+            "Raw r": round(raw, 2),
+            "Partial r (market held constant)": round(par, 2),
+            "Relative r": round(rel, 2),
+            "% of edge kept": f"{100 * abs(par) / abs(raw):.0f}%" if raw else "—",
+        })
+    table = pd.DataFrame(rows).sort_values(
+        "Partial r (market held constant)", key=lambda s: s.abs(), ascending=False
+    )
+    return C, table, clusters
 
 
 # Marks for a check's pass/fail/not-applicable state
@@ -172,8 +250,8 @@ else:
 # =================================================================
 # TABS
 # =================================================================
-tab_data, tab_pre, tab_corr, tab_screen, tab_compare = st.tabs(
-    ["📋 Data", "📈 Pre-Analysis", "🔄 Correlation", "🛡️ Screen", "🔀 Compare pairs"]
+tab_data, tab_pre, tab_corr, tab_screen, tab_compare, tab_groups = st.tabs(
+    ["📋 Data", "📈 Pre-Analysis", "🔄 Correlation", "🛡️ Screen", "🔀 Compare pairs", "🧬 Groups & Market"]
 )
 
 
@@ -481,6 +559,55 @@ with tab_compare:
         hovermode="x unified",
     )
     st.plotly_chart(fig_overlay, use_container_width=True)
+
+
+# ---- Tab: Groups & Market ----
+with tab_groups:
+    st.header("🧬 Signal groups & the market test")
+    st.caption(
+        "Two questions: (1) which signals are secretly the same thing, and "
+        "(2) does each signal really beat the overall commodity market, or is it "
+        "just riding the tide?"
+    )
+    C_mat, mkt_table, clusters = market_analysis()
+
+    st.subheader("1. Which signals are the same underlying force?")
+    st.caption("Signals that move together ≥ 0.70 are grouped — they count as ONE witness, not several.")
+    multi = [g for g in clusters if len(g) > 1]
+    if multi:
+        for g in multi:
+            st.markdown(f"- **Same force:** {', '.join(g)}")
+    singles = [g[0] for g in clusters if len(g) == 1]
+    if singles:
+        st.markdown(f"- **Stand on their own:** {', '.join(singles)}")
+
+    fig_h = go.Figure(data=go.Heatmap(
+        z=C_mat.values, x=list(C_mat.columns), y=list(C_mat.index),
+        zmin=-1, zmax=1, colorscale="RdBu_r",
+        text=C_mat.round(2).values, texttemplate="%{text}", textfont={"size": 9},
+        colorbar=dict(title="corr"),
+    ))
+    fig_h.update_layout(height=520, title="How correlated the leading signals are with each other")
+    st.plotly_chart(fig_h, use_container_width=True)
+
+    # optional richer family-tree image if it was generated by market_analysis.py
+    dpath = HERE / "output" / "signal_dendrogram.png"
+    if dpath.exists():
+        with st.expander("Family tree (dendrogram)"):
+            st.image(str(dpath))
+
+    st.divider()
+    st.subheader("2. Does each signal beat the overall market?")
+    st.caption(
+        "Raw = plain predictive power. Partial = power after the broad commodity market is held "
+        "constant. If Partial stays close to Raw (high % kept), the signal has its own edge; if it "
+        "collapses, the signal was mostly riding the commodity cycle."
+    )
+    st.dataframe(mkt_table, use_container_width=True, hide_index=True)
+    st.caption(
+        "Reading: copper keeps the most of its own edge; oil keeps the least (it's mostly a "
+        "commodity-cycle passenger, not a transformer-specific driver)."
+    )
 
 
 # =================================================================

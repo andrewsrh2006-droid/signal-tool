@@ -75,6 +75,51 @@ manufacturing_employment = Signal(
     loader_args=("manufacturing_employment",),
 )
 
+copper_global_price = Signal(
+    name="copper_global_price",
+    description="Global price of Copper (IMF Primary Commodity Prices)",
+    source_url="https://fred.stlouisfed.org/series/PCOPPUSDM",
+    units="U.S. Dollars per Metric Ton, Not Seasonally Adjusted",
+    loader=load_fred_monthly,
+    loader_args=("copper_global_price",),
+)
+
+wti_oil = Signal(
+    name="wti_oil",
+    description="Spot Crude Oil Price: West Texas Intermediate (WTI)",
+    source_url="https://fred.stlouisfed.org/series/WTISPLC",
+    units="Dollars per Barrel, Not Seasonally Adjusted",
+    loader=load_fred_monthly,
+    loader_args=("wti_oil",),
+)
+
+nickel_global_price = Signal(
+    name="nickel_global_price",
+    description="Global price of Nickel (IMF Primary Commodity Prices)",
+    source_url="https://fred.stlouisfed.org/series/PNICKUSDM",
+    units="U.S. Dollars per Metric Ton, Not Seasonally Adjusted",
+    loader=load_fred_monthly,
+    loader_args=("nickel_global_price",),
+)
+
+steel_scrap_ppi = Signal(
+    name="steel_scrap_ppi",
+    description="PPI by Commodity: Metals and Metal Products: Iron and Steel Scrap",
+    source_url="https://fred.stlouisfed.org/series/WPU1012",
+    units="Index 1982=100, Not Seasonally Adjusted",
+    loader=load_fred_monthly,
+    loader_args=("steel_scrap_ppi",),
+)
+
+electrical_equip_ppi = Signal(
+    name="electrical_equip_ppi",
+    description="PPI by Commodity: Machinery and Equipment: Electrical Machinery and Equipment",
+    source_url="https://fred.stlouisfed.org/series/WPU117",
+    units="Index 1982=100, Not Seasonally Adjusted",
+    loader=load_fred_monthly,
+    loader_args=("electrical_equip_ppi",),
+)
+
 
 # =================================================================
 # SIGNAL PAIR DEFINITIONS
@@ -128,6 +173,56 @@ PAIRS = {
         hypothesis="US manufacturing employment leads transformer PPI by 3-9 months — labor market reflects industrial activity which drives equipment demand",
         expected_lead_low=3,
         expected_lead_high=9,
+        frequency="monthly",
+    ),
+
+    "copper_global_transformer": SignalPair(
+        name="copper_global_transformer",
+        leading=copper_global_price,
+        outcome=transformer_ppi,
+        hypothesis="Global copper price (IMF) leads transformer PPI by 4-10 months — copper is the primary winding metal; an independent copper measure to cross-check the copper PPI signal",
+        expected_lead_low=4,
+        expected_lead_high=10,
+        frequency="monthly",
+    ),
+
+    "oil_transformer": SignalPair(
+        name="oil_transformer",
+        leading=wti_oil,
+        outcome=transformer_ppi,
+        hypothesis="Crude oil (WTI) leads transformer PPI by 3-12 months — energy is an input to manufacturing and transport, so oil cost may feed into equipment prices",
+        expected_lead_low=3,
+        expected_lead_high=12,
+        frequency="monthly",
+    ),
+
+    "nickel_transformer": SignalPair(
+        name="nickel_transformer",
+        leading=nickel_global_price,
+        outcome=transformer_ppi,
+        hypothesis="Global nickel price leads transformer PPI by 4-10 months — nickel is an alloying input to electrical steels and stainless components",
+        expected_lead_low=4,
+        expected_lead_high=10,
+        frequency="monthly",
+    ),
+
+    "steelscrap_transformer": SignalPair(
+        name="steelscrap_transformer",
+        leading=steel_scrap_ppi,
+        outcome=transformer_ppi,
+        hypothesis="Iron and steel scrap price leads transformer PPI by 4-12 months — scrap is the raw feed for electric-arc steelmaking, upstream of the finished steel used in transformer cores",
+        expected_lead_low=4,
+        expected_lead_high=12,
+        frequency="monthly",
+    ),
+
+    "electricalequip_transformer": SignalPair(
+        name="electricalequip_transformer",
+        leading=electrical_equip_ppi,
+        outcome=transformer_ppi,
+        hypothesis="Broad electrical machinery and equipment PPI leads transformer PPI by 0-6 months — transformers are a subset of electrical equipment, so the broader category may move slightly ahead (note: likely a sibling/contemporaneous series, not a true upstream driver)",
+        expected_lead_low=0,
+        expected_lead_high=6,
         frequency="monthly",
     ),
 }
